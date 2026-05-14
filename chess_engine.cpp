@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cstdint> 
+#include <sstream>
 
 using ull = uint64_t; //originally typedef, but using is the modern alternative
 
@@ -104,6 +105,95 @@ void generateKnightMoves(const Board& board, std::vector<Move>& moves) {
             moves.push_back(m); //add to possible moves
             targets &= targets - 1;
         }
+    }
+}
+
+void generatePawnMoves(const Board& board, std::vector<Move>& moves) { 
+    ull enemyPieces = (board.turn == WHITE) ? board.blackPieces() : board.whitePieces();
+    ull singlePush = (board.turn == WHITE) ?  (board.whitePawns << 8) & ~board.occupied()  : (board.blackPawns >> 8) & ~board.occupied();
+    ull doublePush = (board.turn == WHITE) ?
+    ((((0xFF00 & board.whitePawns) << 8) & ~board.occupied()) << 8) & ~board.occupied() :
+    ((((0xFF000000000000 & board.blackPawns) >> 8) & ~board.occupied()) >> 8) & ~board.occupied();
+    ull leftCapture = (board.turn == WHITE) ? (board.whitePawns << 7) & enemyPieces  : (board.blackPawns >> 7) & enemyPieces;
+    ull rightCapture = (board.turn == WHITE) ? (board.whitePawns << 9) & enemyPieces : (board.blackPawns >> 9) & enemyPieces;
+
+    while (singlePush) {
+        int to = __builtin_ctzll(singlePush);
+        int from = (board.turn == WHITE) ? to - 8 : to + 8;
+        // what flags?
+        uint8_t flag = ((1ULL << to) & RANK_8 || (1ULL << to) & RANK_1) ? PROMOTION : QUIET;
+        // push the move
+        singlePush &= singlePush - 1;
+        Move m;
+        m.from = from;
+        m.to = to;
+        m.flags = flag;
+        moves.push_back(m);
+    }
+
+    while (doublePush) { 
+        int to = __builtin_ctzll(doublePush);
+        int from = (board.turn == WHITE) ? to - 16 : to + 16;
+        uint8_t flag = QUIET;
+        doublePush &= doublePush - 1;
+        Move m;
+        m.from = from;
+        m.to = to;
+        m.flags = flag;
+        moves.push_back(m);
+    }
+
+    while (leftCapture) { 
+        int to = __builtin_ctzll(leftCapture);
+        int from = (board.turn == WHITE) ? to - 7 : to + 7;
+        uint8_t flag = ((1ULL << to) & RANK_8 || (1ULL << to) & RANK_1) ? PROMOTION : CAPTURE;
+        leftCapture &= leftCapture - 1;
+        Move m;
+        m.from = from;
+        m.to = to;
+        m.flags = flag;
+        moves.push_back(m);
+    }
+
+    while (rightCapture) { 
+        int to = __builtin_ctzll(rightCapture);
+        int from = (board.turn == WHITE) ? to - 9 : to + 9;
+        uint8_t flag = ((1ULL << to) & RANK_8 || (1ULL << to) & RANK_1) ? PROMOTION : CAPTURE;
+        rightCapture &= rightCapture - 1;
+        Move m;
+        m.from = from;
+        m.to = to;
+        m.flags = flag;
+        moves.push_back(m);
+    }
+
+    ull enPassantLeft = (board.turn == WHITE) ?
+    (board.whitePawns << 7) & board.enPassantSquare :
+    (board.blackPawns >> 9) & board.enPassantSquare;
+    while (enPassantLeft) { 
+        int to = __builtin_ctzll(enPassantLeft);
+        int from = (board.turn == WHITE) ? (to - 7) : (to + 7);
+        uint8_t flag = EN_PASSANT;
+        enPassantLeft &= enPassantLeft - 1;
+        Move m;
+        m.from = from;
+        m.to = to;
+        m.flags = flag;
+        moves.push_back(m);
+    }
+    ull enPassantRight = (board.turn == WHITE) ?
+    (board.whitePawns << 9) & board.enPassantSquare :
+    (board.blackPawns >> 7) & board.enPassantSquare;
+    while (enPassantRight) { 
+        int to = __builtin_ctzll(enPassantRight);
+        int from = (board.turn == WHITE) ? (to - 9) : (to + 9);
+        uint8_t flag = EN_PASSANT;
+        enPassantRight &= enPassantRight - 1;
+        Move m;
+        m.from = from;
+        m.to = to;
+        m.flags = flag;
+        moves.push_back(m);
     }
 }
 
@@ -609,4 +699,205 @@ bool inCheck(const Board& board, Color side) {
        (getBishopAttacks(kingSq, board.occupied()) & enemyBishopsAndQueens) ||
        (KNIGHT_ATTACKS[kingSq] & enemyKnights) ||
        (pawnAttacks & enemyPawns);
+}
+
+Board history[256]; // stack of board states
+int historyIndex = 0;
+
+void pushBoard(const Board& board) {
+    history[historyIndex++] = board;
+}
+
+Board popBoard() {
+    return history[--historyIndex];
+}
+
+void generateLegalMoves(Board& board, std::vector<Move>& moves) {
+    std::vector<Move> pseudoLegal;
+    Color sideToCheck = board.turn;
+    generatePawnMoves(board, pseudoLegal);
+    generateKnightMoves(board, pseudoLegal);
+    generateBishopMoves(board, pseudoLegal);
+    generateRookMoves(board, pseudoLegal);
+    generateQueenMoves(board, pseudoLegal);
+    generateKingMoves(board, pseudoLegal);
+    for (auto& i : pseudoLegal) {
+        pushBoard(board);
+        makeMove(board, i);
+        if (!inCheck(board, sideToCheck)) {
+            moves.push_back(i);
+        }
+        board = popBoard();
+    }
+}
+
+int evaluate(const Board& board) {
+    // count white material
+    int whiteMaterial = 
+    __builtin_popcountll(board.whitePawns)   * 100 +
+    __builtin_popcountll(board.whiteKnights) * 320 +
+    __builtin_popcountll(board.whiteBishops) * 330 + 
+    __builtin_popcountll(board.whiteRooks)   * 500 + 
+    __builtin_popcountll(board.whiteQueens)  * 900;
+
+
+    // count black material
+    int blackMaterial = 
+    __builtin_popcountll(board.blackPawns)   * 100 +
+    __builtin_popcountll(board.blackKnights) * 320 +
+    __builtin_popcountll(board.blackBishops) * 330 + 
+    __builtin_popcountll(board.blackRooks)   * 500 + 
+    __builtin_popcountll(board.blackQueens)  * 900;
+    // return difference
+    return whiteMaterial - blackMaterial;
+}
+
+int minimax(Board& board, int depth) {
+    if (depth == 0) {return evaluate(board);}
+    // generate legal moves
+    std::vector<Move>legalMoves;
+    generateLegalMoves(board, legalMoves);
+    if (legalMoves.empty()) {
+    if (inCheck(board, board.turn)) return (board.turn == WHITE) ? -99999 : 99999;
+    return 0; // stalemate
+    }
+    // if white's turn, find maximum score
+    if (board.turn == WHITE) {
+        int best = -99999;
+        for (auto& move : legalMoves) {
+            pushBoard(board);
+            makeMove(board, move);
+            int score = minimax(board, depth - 1);// recurse here
+            board = popBoard();
+            // update best if score is better
+            if (score > best) best = score;
+        }
+        return best;
+    } else { // if black's turn, find minimum score
+        int best = 99999; 
+        for (auto& move : legalMoves) { 
+            pushBoard(board);
+            makeMove(board, move);
+            int score = minimax(board, depth - 1);
+            board = popBoard();
+            if (score < best) best = score;
+        }
+        return best;
+    }
+    
+}
+
+Move getBestMove(Board& board, int depth) {
+    std::vector<Move> legalMoves;
+    generateLegalMoves(board, legalMoves);
+    Move bestMove = legalMoves[0];
+    int bestScore = (board.turn == WHITE) ? -99999 : 99999; 
+    // loop through moves, call minimax, track best
+    for (auto& move : legalMoves) {
+        pushBoard(board);
+        makeMove(board, move);
+        int score = minimax(board, depth - 1);
+        board = popBoard();
+        if (board.turn == WHITE) { 
+            if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+            }
+        } else { 
+            if (score < bestScore) {
+            bestScore = score;
+            bestMove = move;
+            }
+        }
+    }
+    return bestMove;
+}
+
+std::string squareToString(int sq) {
+    char file = 'a' + (sq % 8);
+    char rank = '1' + (sq / 8);
+    return std::string({file, rank});
+}
+
+int stringToSquare(const std::string& s) {
+    int file = s[0] - 'a';
+    int rank = s[1] - '1';
+    return rank * 8 + file;
+}
+
+int main() {
+    initKnightAttacks();
+    initKingAttacks();
+    initRookMagics();
+    initBishopMagics();
+
+    Board board;
+    std::string line;
+
+    while (std::getline(std::cin, line)) {
+        if (line == "uci") {
+            std::cout << "id name MyEngine\n";
+            std::cout << "id author YourName\n";
+            std::cout << "uciok\n" << std::flush;
+
+        } else if (line == "isready") {
+            std::cout << "readyok\n" << std::flush;
+
+        } else if (line == "ucinewgame") {
+            board = Board();
+
+        } else if (line.substr(0, 8) == "position") {
+            board = Board();
+            size_t movesPos = line.find("moves");
+            if (movesPos != std::string::npos) {
+                std::istringstream ss(line.substr(movesPos + 6));
+                std::string moveStr;
+                while (ss >> moveStr) {
+                    Move m;
+                    m.from = stringToSquare(moveStr.substr(0, 2));
+                    m.to   = stringToSquare(moveStr.substr(2, 2));
+                    ull fromBit = 1ULL << m.from;
+                    ull toBit   = 1ULL << m.to;
+                    ull enemyPieces = (board.turn == WHITE) ? board.blackPieces() : board.whitePieces();
+                    if ((board.whiteKing & fromBit || board.blackKing & fromBit) && abs(m.to - m.from) == 2) {
+                        m.flags = CASTLING;
+                    } else if ((board.whitePawns & fromBit || board.blackPawns & fromBit) && toBit == board.enPassantSquare) {
+                        m.flags = EN_PASSANT;
+                    } else if ((board.whitePawns & fromBit || board.blackPawns & fromBit) && (toBit & RANK_8 || toBit & RANK_1)) {
+                        m.flags = PROMOTION;
+                        if (moveStr.length() == 5) {
+                            switch (moveStr[4]) {
+                                case 'q': m.promoted = PROMOTE_QUEEN;  break;
+                                case 'r': m.promoted = PROMOTE_ROOK;   break;
+                                case 'b': m.promoted = PROMOTE_BISHOP; break;
+                                case 'n': m.promoted = PROMOTE_KNIGHT; break;
+                            }
+                        }
+                    } else if (toBit & enemyPieces) {
+                        m.flags = CAPTURE;
+                    } else {
+                        m.flags = QUIET;
+                    }
+                    makeMove(board, m);
+                }
+            }
+
+        } else if (line.substr(0, 2) == "go") {
+            Move best = getBestMove(board, 3);
+            std::string result = "bestmove " + squareToString(best.from) + squareToString(best.to);
+            if (best.flags == PROMOTION) {
+                switch (best.promoted) {
+                    case PROMOTE_QUEEN:  result += 'q'; break;
+                    case PROMOTE_ROOK:   result += 'r'; break;
+                    case PROMOTE_BISHOP: result += 'b'; break;
+                    case PROMOTE_KNIGHT: result += 'n'; break;
+                }
+            }
+            std::cout << result << "\n" << std::flush;
+
+        } else if (line == "quit") {
+            return 0;
+        }
+    }
+    return 0;
 }
