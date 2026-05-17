@@ -1,6 +1,9 @@
 #include <iostream>
 #include <cstdint> 
 #include <sstream>
+#include <fstream>
+
+std::ofstream engineLog("engine_log.txt", std::ios::app);
 
 using ull = uint64_t; //originally typedef, but using is the modern alternative
 
@@ -114,8 +117,10 @@ void generatePawnMoves(const Board& board, std::vector<Move>& moves) {
     ull doublePush = (board.turn == WHITE) ?
     ((((0xFF00 & board.whitePawns) << 8) & ~board.occupied()) << 8) & ~board.occupied() :
     ((((0xFF000000000000 & board.blackPawns) >> 8) & ~board.occupied()) >> 8) & ~board.occupied();
-    ull leftCapture = (board.turn == WHITE) ? (board.whitePawns << 7) & enemyPieces  : (board.blackPawns >> 7) & enemyPieces;
-    ull rightCapture = (board.turn == WHITE) ? (board.whitePawns << 9) & enemyPieces : (board.blackPawns >> 9) & enemyPieces;
+    engineLog << "Black double push bb: " << doublePush << "\n";
+    engineLog << "Black pawns: " << board.blackPawns << "\n";
+    ull leftCapture = (board.turn == WHITE) ? (board.whitePawns << 7) & enemyPieces  & ~FILE_A : (board.blackPawns >> 7) & enemyPieces & ~FILE_H;
+    ull rightCapture = (board.turn == WHITE) ? (board.whitePawns << 9) & enemyPieces &~FILE_H : (board.blackPawns >> 9) & enemyPieces & ~FILE_A;
 
     while (singlePush) {
         int to = __builtin_ctzll(singlePush);
@@ -133,7 +138,7 @@ void generatePawnMoves(const Board& board, std::vector<Move>& moves) {
 
     while (doublePush) { 
         int to = __builtin_ctzll(doublePush);
-        int from = (board.turn == WHITE) ? to - 16 : to + 16;
+        int from = (board.turn == WHITE) ? to - 15 : to + 15;
         uint8_t flag = QUIET;
         doublePush &= doublePush - 1;
         Move m;
@@ -499,6 +504,7 @@ void initRookMagics() {
         int shift = 64 - popcount;
         int size = 1 << popcount;
 
+        rookMagics[sq].magic = ROOK_MAGICS[sq];
         rookMagics[sq].mask = mask;
         rookMagics[sq].shift = shift;
         rookMagics[sq].attacks = rookAttackTable + rookOffset;
@@ -516,19 +522,22 @@ void initRookMagics() {
 }
 
 ull getRookAttacks(int sq, ull occupied) {
-    ull blockers = occupied & rookMagics[sq].mask;
-    int index = (blockers * rookMagics[sq].magic) >> rookMagics[sq].shift;
-    return rookMagics[sq].attacks[index];
+    /*ull blockers = occupied & rookMagics[sq].mask;
+    int index = (blockers * rookMagics[sq].magic) >> rookMagics[sq].shift; //magic bitboards dont seem to work correctly
+    return rookMagics[sq].attacks[index];*/
+    return computeRookAttacks(sq, occupied);
 }
 
 
 void generateRookMoves(const Board& board, std::vector<Move>& moves) { 
     ull rooks = (board.turn == WHITE) ? board.whiteRooks : board.blackRooks;
     ull enemyPieces = (board.turn == WHITE) ? board.blackPieces() : board.whitePieces();
+    ull ownPieces = (board.turn == WHITE) ? board.whitePieces() : board.blackPieces();
+
     while (rooks) { 
         int sq = __builtin_ctzll(rooks); //gets position of the first rook from 0
         rooks &= rooks - 1; //isolate rook
-        ull targets = getRookAttacks(sq, board.occupied()); //retrieve legal rook moves
+        ull targets = getRookAttacks(sq, board.occupied()) & ~ownPieces; //retrieve legal rook moves
         while (targets) { 
             Move m; //create object m of Move struct
             m.from = sq;
@@ -569,6 +578,7 @@ void initBishopMagics() {
         int shift = 64 - popcount;
         int size = 1 << popcount;
 
+        bishopMagics[sq].magic = BISHOP_MAGICS[sq];
         bishopMagics[sq].mask = mask;
         bishopMagics[sq].shift = shift;
         bishopMagics[sq].attacks = bishopAttackTable + bishopOffset;
@@ -586,18 +596,20 @@ void initBishopMagics() {
 }
 
 ull getBishopAttacks(int sq, ull occupied) {
-    ull blockers = occupied & bishopMagics[sq].mask;
+    /*ull blockers = occupied & bishopMagics[sq].mask;
     int index = (blockers * bishopMagics[sq].magic) >> bishopMagics[sq].shift;
-    return bishopMagics[sq].attacks[index];
+    return bishopMagics[sq].attacks[index]; */
+    return computeBishopAttacks(sq, occupied);
 }
 
 void generateBishopMoves(const Board& board, std::vector<Move>& moves) { 
     ull bishops = (board.turn == WHITE) ? board.whiteBishops : board.blackBishops;
     ull enemyPieces = (board.turn == WHITE) ? board.blackPieces() : board.whitePieces();
+    ull ownPieces = (board.turn == WHITE) ? board.whitePieces()  :  board.blackPieces();
     while (bishops) { 
         int sq = __builtin_ctzll(bishops); //gets position of the first rook from 0
         bishops &= bishops - 1; //isolate rook
-        ull targets = getBishopAttacks(sq, board.occupied()); //retrieve legal rook moves
+        ull targets = getBishopAttacks(sq, board.occupied()) & ~ownPieces; //retrieve legal rook moves
         while (targets) { 
             Move m; //create object m of Move struct
             m.from = sq;
@@ -611,12 +623,14 @@ void generateBishopMoves(const Board& board, std::vector<Move>& moves) {
 
 
 ull getQueenAttacks(int sq, ull occupied) {
+    
     return getRookAttacks(sq, occupied) | getBishopAttacks(sq, occupied);
 }
 
 void generateQueenMoves(const Board& board, std::vector<Move>& moves) { 
     ull queens = (board.turn == WHITE) ? board.whiteQueens : board.blackQueens;
     ull enemyPieces = (board.turn == WHITE) ? board.blackPieces() : board.whitePieces();
+    ull ownPieces = (board.turn == WHITE) ? board.whitePieces()  :  board.blackPieces();
     while (queens) { 
         int sq = __builtin_ctzll(queens); //gets position of the first rook from 0
         queens &= queens - 1; //isolate rook
@@ -787,13 +801,38 @@ int minimax(Board& board, int depth) {
     
 }
 
+
+
+std::string squareToString(int sq) {
+    char file = 'a' + (sq % 8);
+    char rank = '1' + (sq / 8);
+    return std::string({file, rank});
+}
+
+int stringToSquare(const std::string& s) {
+    int file = s[0] - 'a';
+    int rank = s[1] - '1';
+    return rank * 8 + file;
+}
+
 Move getBestMove(Board& board, int depth) {
     std::vector<Move> legalMoves;
     generateLegalMoves(board, legalMoves);
+
+    engineLog << "Legal moves: ";
+    for (auto& m : legalMoves) { 
+        engineLog << squareToString((int)m.from) << squareToString((int)m.to) << " ";
+    }
+    engineLog << '\n' << std::flush;
+
+    if (legalMoves.empty()) return Move{};
+
+
     Move bestMove = legalMoves[0];
     int bestScore = (board.turn == WHITE) ? -99999 : 99999; 
     // loop through moves, call minimax, track best
     for (auto& move : legalMoves) {
+        
         pushBoard(board);
         makeMove(board, move);
         int score = minimax(board, depth - 1);
@@ -810,19 +849,8 @@ Move getBestMove(Board& board, int depth) {
             }
         }
     }
+    
     return bestMove;
-}
-
-std::string squareToString(int sq) {
-    char file = 'a' + (sq % 8);
-    char rank = '1' + (sq / 8);
-    return std::string({file, rank});
-}
-
-int stringToSquare(const std::string& s) {
-    int file = s[0] - 'a';
-    int rank = s[1] - '1';
-    return rank * 8 + file;
 }
 
 int main() {
@@ -834,7 +862,9 @@ int main() {
     Board board;
     std::string line;
 
+    
     while (std::getline(std::cin, line)) {
+        engineLog << "IN: " << line << "\n" << std::flush;
         if (line == "uci") {
             std::cout << "id name Bean\n";
             std::cout << "id author Vince\n";
@@ -883,7 +913,7 @@ int main() {
             }
 
         } else if (line.substr(0, 2) == "go") {
-            Move best = getBestMove(board, 3);
+            Move best = getBestMove(board, 1    );
             std::string result = "bestmove " + squareToString(best.from) + squareToString(best.to);
             if (best.flags == PROMOTION) {
                 switch (best.promoted) {
@@ -894,10 +924,14 @@ int main() {
                 }
             }
             std::cout << result << "\n" << std::flush;
+            engineLog << "OUT: " << result << "\n" << std::flush;
+
+            
 
         } else if (line == "quit") {
             return 0;
         }
+        
     }
     return 0;
 }
