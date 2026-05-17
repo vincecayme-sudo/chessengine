@@ -836,8 +836,8 @@ int main() {
 
     while (std::getline(std::cin, line)) {
         if (line == "uci") {
-            std::cout << "id name MyEngine\n";
-            std::cout << "id author YourName\n";
+            std::cout << "id name Bean\n";
+            std::cout << "id author Vince\n";
             std::cout << "uciok\n" << std::flush;
 
         } else if (line == "isready") {
