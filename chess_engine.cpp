@@ -2,6 +2,7 @@
 #include <cstdint> 
 #include <sstream>
 #include <fstream>
+#include <vector>
 
 std::ofstream engineLog("engine_log.txt", std::ios::app);
 
@@ -26,6 +27,8 @@ static const ull FILE_AB = 0x0303030303030303;
 static const ull FILE_GH = 0xC0C0C0C0C0C0C0C0;
 static const ull RANK_1 = 0xFF;
 static const ull RANK_8 = 0xFF00000000000000;
+static const ull RANK_5 = 0xFF00000000;
+static const ull RANK_4 = 0xFF000000;
 
 ull KNIGHT_ATTACKS[64];
 
@@ -114,14 +117,24 @@ void generateKnightMoves(const Board& board, std::vector<Move>& moves) {
 void generatePawnMoves(const Board& board, std::vector<Move>& moves) { 
     ull enemyPieces = (board.turn == WHITE) ? board.blackPieces() : board.whitePieces();
     ull singlePush = (board.turn == WHITE) ?  (board.whitePawns << 8) & ~board.occupied()  : (board.blackPawns >> 8) & ~board.occupied();
-    ull doublePush = (board.turn == WHITE) ?
-    ((((0xFF00 & board.whitePawns) << 8) & ~board.occupied()) << 8) & ~board.occupied() :
-    ((((0xFF000000000000 & board.blackPawns) >> 8) & ~board.occupied()) >> 8) & ~board.occupied();
-    engineLog << "Black double push bb: " << doublePush << "\n";
-    engineLog << "Black pawns: " << board.blackPawns << "\n";
-    ull leftCapture = (board.turn == WHITE) ? (board.whitePawns << 7) & enemyPieces  & ~FILE_A : (board.blackPawns >> 7) & enemyPieces & ~FILE_H;
-    ull rightCapture = (board.turn == WHITE) ? (board.whitePawns << 9) & enemyPieces &~FILE_H : (board.blackPawns >> 9) & enemyPieces & ~FILE_A;
+    ull doublePush = 0;
+    if (board.turn == WHITE) {
+    ull firstStep = (board.whitePawns << 8) & ~board.occupied();
+    ull secondStep = (firstStep << 8) & ~board.occupied() & RANK_4;
+    doublePush = secondStep;
+    } else {
+    ull firstStep = (board.blackPawns >> 8) & ~board.occupied();
+    ull secondStep = (firstStep >> 8) & ~board.occupied() & RANK_5;
+    doublePush = secondStep;
+    }
+    
+    ull rightCapture = (board.turn == WHITE) ?
+    ((board.whitePawns & ~FILE_H) << 9) & enemyPieces :
+    ((board.blackPawns & ~FILE_H) >> 9) & enemyPieces;
 
+    ull leftCapture = (board.turn == WHITE) ?
+    ((board.whitePawns & ~FILE_A) << 7) & enemyPieces :
+    ((board.blackPawns & ~FILE_A) >> 7) & enemyPieces;
     while (singlePush) {
         int to = __builtin_ctzll(singlePush);
         int from = (board.turn == WHITE) ? to - 8 : to + 8;
@@ -138,7 +151,7 @@ void generatePawnMoves(const Board& board, std::vector<Move>& moves) {
 
     while (doublePush) { 
         int to = __builtin_ctzll(doublePush);
-        int from = (board.turn == WHITE) ? to - 15 : to + 15;
+        int from = (board.turn == WHITE) ? to - 16 : to + 16;
         uint8_t flag = QUIET;
         doublePush &= doublePush - 1;
         Move m;
@@ -387,78 +400,55 @@ struct MagicEntry {
 MagicEntry rookMagics[64];
 MagicEntry bishopMagics[64];
 
-ull computeRookAttacks(int sq, ull occupied) { 
-    int current = sq + 1; 
+ull computeRookAttacks(int sq, ull occupied) {
     ull attacks = 0;
-    while (current < 64 && ((1ULL << current) & ~FILE_H)) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
+    int r, f;
+    int directions[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+    
+    for (auto& dir : directions) {
+        int dr = dir[0], df = dir[1];
+        int rank = sq / 8 + dr;
+        int file = sq % 8 + df;
+        while (rank >= 0 && rank < 8 && file >= 0 && file < 8) {
+            int current = rank * 8 + file;
+            attacks |= 1ULL << current;
+            if (occupied & (1ULL << current)) break;
+            rank += dr;
+            file += df;
         }
-        current++;
-    }
-    current = sq - 1; //declare current as int to prevent underflow (sq(as 0) - 1)
-    while (current < 64 && current >=0 && ((1ULL << current) & ~FILE_A)) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
-        }
-        current--;
-    }
-    current = sq + 8;
-    while (current < 64) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
-        }
-        current += 8;
-    }
-    current = sq - 8;
-    while (current < 64 && current >= 0) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
-        }
-        current -= 8;
     }
     return attacks;
 }
 
-ull computeBishopAttacks(int sq, ull occupied) { 
-    int current = sq + 7; //diagonal left up
+ull computeBishopAttacks(int sq, ull occupied) {
     ull attacks = 0;
-    while (current < 64 && current >=0 && ((1ULL << current) & ~FILE_A)) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
+    
+    // four diagonal directions: {rank change, file change}
+    // {1,1} = up-right, {1,-1} = up-left
+    // {-1,1} = down-right, {-1,-1} = down-left
+    int directions[4][2] = {{1,1},{1,-1},{-1,1},{-1,-1}};
+    
+    for (auto& dir : directions) {
+        int dr = dir[0]; // rank direction: +1 = up, -1 = down
+        int df = dir[1]; // file direction: +1 = right, -1 = left
+        
+        // start one step away from the bishop's square
+        int rank = sq / 8 + dr; // sq / 8 extracts the rank (0-7)
+        int file = sq % 8 + df; // sq % 8 extracts the file (0-7)
+        
+        // continue along the ray while still on the board
+        while (rank >= 0 && rank < 8 && file >= 0 && file < 8) {
+            int current = rank * 8 + file; // convert rank/file back to square index
+            attacks |= 1ULL << current;    // add this square to attack set
+            
+            // if a piece is on this square, ray is blocked - stop here
+            // the blocker square is included (can be captured) but no further
+            if (occupied & (1ULL << current)) break;
+            
+            // move one more step in the same direction
+            rank += dr;
+            file += df;
         }
-        current += 7;
-    }
-
-    current = sq + 9; //diagonal right up
-    while (current < 64 && current >= 0 && ((1ULL << current) & ~FILE_H)) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
-        }
-        current += 9;
-    }
-
-    current = sq - 7; //diagonal right down
-    while (current < 64 && current >= 0 && ((1ULL << current) & ~FILE_H)) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
-        }
-        current -= 7;
-    }
-    current = sq - 9; //diagonal left down
-    while (current < 64 && current >= 0 && ((1ULL <<current) & ~FILE_A)) { 
-        attacks |= 1ULL << current;
-        if (occupied & (1ULL << current)) { 
-            break;
-        }
-        current -= 9;
     }
     return attacks;
 }
@@ -686,6 +676,11 @@ bool inCheck(const Board& board, Color side) {
     ull kings = (side == WHITE) ? board.whiteKing : board.blackKing;
     int kingSq = __builtin_ctzll(kings);// find the king's square
 
+    engineLog << "kingSq: " << kingSq << "\n";
+    engineLog << "enemyBishopsAndQueens: " << ((side == WHITE) ? board.blackBishops | board.blackQueens : board.whiteBishops | board.whiteQueens) << "\n";
+    engineLog << "bishopAttacks from king: " << getBishopAttacks(kingSq, board.occupied()) << "\n";
+    engineLog << "intersection: " << (getBishopAttacks(kingSq, board.occupied()) & ((side == WHITE) ? board.blackBishops | board.blackQueens : board.whiteBishops | board.whiteQueens)) << "\n";
+    engineLog << std::flush;
     ull pawnAttacks = (side == WHITE) ?
     ((1ULL << kingSq) << 7 & ~FILE_H) | 
     ((1ULL << kingSq) << 9 & ~FILE_A)
@@ -913,7 +908,7 @@ int main() {
             }
 
         } else if (line.substr(0, 2) == "go") {
-            Move best = getBestMove(board, 1    );
+            Move best = getBestMove(board, 1);
             std::string result = "bestmove " + squareToString(best.from) + squareToString(best.to);
             if (best.flags == PROMOTION) {
                 switch (best.promoted) {
