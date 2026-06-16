@@ -18,7 +18,7 @@ It uses bitboards for board representation, generates legal chess moves, searche
 
 ## Current Goal
 
-The next major improvement is replacing plain minimax with alpha-beta pruning, allowing deeper search at better speed.
+The next major improvement is adding basic move ordering. Currently if the engine checks 'bad' moves first, there is less pruning. So I need to add a way to make it look for "better" moves first which looks something like looking for forcing moves first, or captures, etc.
 
 ## Build
 
