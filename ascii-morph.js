@@ -110,6 +110,7 @@
     // no way to undershoot and leave a gap.
     let cols, rows, t = 0, rafId;
     let running = true;
+    let lastTime = null;
 
     function computeGridSize() {
       const w = Math.max(screen.width, window.innerWidth || 0, document.documentElement.clientWidth || 0) * 2;
@@ -118,9 +119,17 @@
       rows = Math.ceil(h / cellH);
     }
 
-    function render() {
+    function render(now) {
       if (!running) return;
-      t += speed;
+
+      // Advance by elapsed time, not by a fixed amount per frame, so the
+      // animation runs at the same perceived speed regardless of the
+      // browser's actual frame rate (Chrome and Safari don't always drive
+      // requestAnimationFrame at the same effective rate).
+      if (lastTime === null) lastTime = now;
+      const dt = Math.min(now - lastTime, 100); // clamp to avoid jumps after tab switches
+      lastTime = now;
+      t += speed * (dt / 16.6667); // normalised so `speed` behaves like "per 60fps frame"
 
       const lines = [];
       for (let row = 0; row < rows; row++) {
@@ -146,14 +155,7 @@
     computeGridSize();
     window.addEventListener('resize', computeGridSize);
 
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    if (!mq.matches) {
-      rafId = requestAnimationFrame(render);
-    }
-    mq.addEventListener('change', e => {
-      if (e.matches) { cancelAnimationFrame(rafId); pre.textContent = ''; }
-      else { rafId = requestAnimationFrame(render); }
-    });
+    rafId = requestAnimationFrame(render);
 
     return {
       destroy() {
