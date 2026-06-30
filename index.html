@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bean Chess Engine</title>
+
+<!-- chess.js: move validation / FEN / move history -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<!-- chessboard.js: board rendering -->
+<link  rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0a0a0a;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* Everything except the ascii <pre> layer sits above it */
+  body > *:not(pre) {
+    position: relative;
+    z-index: 1;
+  }
+
+  h1 { font-size: 1.6em; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .subtitle { font-size: 0.75em; color: #888; margin-bottom: 20px; }
+
+  #board-wrap {
+    width: min(480px, 90vw);
+  }
+
+  #board { width: 100%; }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  button {
+    background: transparent;
+    color: #fff;
+    border: 1px solid #fff;
+    padding: 8px 20px;
+    font-family: inherit;
+    font-size: 0.8em;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+  button:hover { background: #fff; color: #111; }
+  button:disabled { opacity: 0.3; cursor: default; }
+
+  #status {
+    margin-top: 14px;
+    font-size: 0.85em;
+    min-height: 1.4em;
+    color: #ccc;
+    text-align: center;
+  }
+
+  #status.alert { color: #ff6b6b; }
+  #status.good  { color: #00ff87; }
+
+  .depth-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8em;
+    color: #aaa;
+  }
+  .depth-wrap input {
+    width: 48px;
+    background: #222;
+    border: 1px solid #555;
+    color: #fff;
+    padding: 4px 8px;
+    font-family: inherit;
+    text-align: center;
+  }
+
+  #loading {
+    font-size: 0.8em;
+    color: #888;
+    margin-top: 10px;
+    animation: blink 1s step-start infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+
+<h1>BEAN</h1>
+<p class="subtitle">C++ Chess Engine · WebAssembly</p>
+
+<div id="board-wrap">
+  <div id="board"></div>
+</div>
+
+<div id="loading">loading engine...</div>
+
+<div class="controls" style="display:none" id="controls">
+  <!-- <button id="btn-flip">Flip Board</button> -->
+  <button id="btn-new">New Game</button>
+  <div class="depth-wrap">
+    depth: <input type="number" id="depth" value="3" min="1" max="6">
+  </div>
+</div>
+
+<div id="status"></div>
+
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// WASM bridge — all engine calls go through these helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+let BeanReady = false;
+
+
+function onBeanReady() {
+  Module._bean_init();
+  BeanReady = true;
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('controls').style.display = 'flex';
+  setStatus('Your move — you play White');
+}
+
+function beanSetPosition(moveList) {
+  // moveList: space-separated UCI moves from start, e.g. "e2e4 e7e5"
+  const ptr = allocStr(moveList);
+  Module._bean_set_position(ptr);
+  Module._free(ptr);
+}
+
+function beanGetBestMove(depth) {
+  const ptr = Module._bean_get_best_move(depth);
+  return Module.UTF8ToString(ptr); // e.g. "e7e5"
+}
+
+function beanNewGame() {
+  Module._bean_new_game();
+}
+
+function beanIsCheckmate() { return Module._bean_is_checkmate() === 1; }
+function beanIsStalemate() { return Module._bean_is_stalemate() === 1; }
+
+function allocStr(str) {
+  // Allocate a C string in WASM memory and return its pointer
+  const bytes = new TextEncoder().encode(str + '\0');
+  const ptr = Module._malloc(bytes.length);
+  const heap = Module.HEAPU8 || HEAPU8;
+  heap.set(bytes, ptr);
+  return ptr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Game logic
+// ─────────────────────────────────────────────────────────────────────────────
+
+const chess = new Chess();  // chess.js handles legal move validation & game state
+let board;                  // chessboard.js instance
+let moveHistory = [];       // UCI move list sent to Bean
+let engineThinking = false;
+
+function setStatus(msg, cls = '') {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls;
+}
+
+function getDepth() {
+  return parseInt(document.getElementById('depth').value) || 3;
+}
+
+function onDrop(source, target) {
+  if (engineThinking) return 'snapback';
+  if (chess.turn() !== 'w') return 'snapback'; // human plays white
+
+  // Try the move with chess.js first (validates legality)
+  const move = chess.move({ from: source, to: target, promotion: 'q' });
+  if (!move) return 'snapback';
+
+  // Record in UCI format and sync Bean's board
+  moveHistory.push(move.from + move.to + (move.promotion || ''));
+  beanSetPosition(moveHistory.join(' '));
+
+  if (beanIsCheckmate()) { setStatus('Checkmate! You win.', 'good'); return; }
+  if (beanIsStalemate()) { setStatus('Stalemate.'); return; }
+
+  engineMove();
+}
+
+function onSnapEnd() {
+  board.position(chess.fen());
+}
+
+function engineMove() {
+  engineThinking = true;
+  setStatus('Bean is thinking...');
+
+  // Use setTimeout so the UI updates before the synchronous WASM call blocks
+  setTimeout(() => {
+    const uci = beanGetBestMove(getDepth()); // e.g. "e7e5"
+    if (!uci || uci.length < 4) {
+      setStatus('Engine error — no move returned', 'alert');
+      engineThinking = false;
+      return;
+    }
+
+    const from = uci.slice(0, 2);
+    const to   = uci.slice(2, 4);
+    const promo = uci[4] || 'q';
+
+    chess.move({ from, to, promotion: promo });
+    moveHistory.push(uci);
+    beanSetPosition(moveHistory.join(' '));
+    board.position(chess.fen());
+
+    engineThinking = false;
+
+    if (beanIsCheckmate()) { setStatus('Checkmate! Bean wins.', 'alert'); return; }
+    if (beanIsStalemate()) { setStatus('Stalemate.'); return; }
+    setStatus('Your move');
+  }, 30);
+}
+
+function newGame() {
+  chess.reset();
+  moveHistory = [];
+  if (BeanReady) beanNewGame();
+  board.start();
+  setStatus('Your move — you play White');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Board init
+// ─────────────────────────────────────────────────────────────────────────────
+
+board = Chessboard('board', {
+  draggable: true,
+  position: 'start',
+  onDrop,
+  onSnapEnd,
+  pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
+});
+
+//document.getElementById('btn-flip').addEventListener('click', () => board.flip());
+document.getElementById('btn-new').addEventListener('click', newGame);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Load WASM module
+// ─────────────────────────────────────────────────────────────────────────────
+var Module = {
+  onRuntimeInitialized: onBeanReady
+};
+</script>
+<script src="bean.js"></script>
+<script src="ascii-morph.js"></script>
+<script>
+  initAsciiMorph(document.body, {
+    opacity: 0.12,
+    speed: 0.25
+  });
+</script>
+</body>
+</html>
