@@ -114,7 +114,7 @@
 <div id="loading">loading engine...</div>
 
 <div class="controls" style="display:none" id="controls">
-  <!-- <button id="btn-flip">Flip Board</button> -->
+  <button id="btn-flip">Flip Board</button>
   <button id="btn-new">New Game</button>
   <div class="depth-wrap">
     depth: <input type="number" id="depth" value="3" min="1" max="6">
@@ -259,7 +259,9 @@ board = Chessboard('board', {
   pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
 });
 
-//document.getElementById('btn-flip').addEventListener('click', () => board.flip());
+window.addEventListener('load', () => board.resize());
+
+document.getElementById('btn-flip').addEventListener('click', () => board.flip());
 document.getElementById('btn-new').addEventListener('click', newGame);
 
 // ─────────────────────────────────────────────────────────────────────────────
